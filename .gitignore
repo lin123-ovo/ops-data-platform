@@ -1,0 +1,46 @@
+# Local settings and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Dependencies and generated files
+.venv/
+venv/
+node_modules/
+dist/
+__pycache__/
+*.py[cod]
+*.tsbuildinfo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+coverage/
+
+# Local data, reports and backups
+/backend/storage/
+/reports/
+/backups/
+*.before-local-deploy*
+*.log
+*.dump
+*.sqlite*
+*.tgz
+*.tar.gz
+
+# Local editor and OS files
+.idea/
+.vscode/
+.DS_Store
+
+# Chinese development notes kept locally
+/GraphRAG升级说明.md
+/向量化优化说明.md
+/开发参考.md
+/文档清洗优化说明.md
+/源码注释验证记录.md
+/源码阅读指南.md
+/运维数据中台演示.md

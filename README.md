@@ -86,15 +86,17 @@ VITE_OPS_ENABLED=true npm run dev
 
 Open the [Dashboard](http://127.0.0.1:5174/dashboard), [Operations Workbench](http://127.0.0.1:5174/ops), or [API documentation](http://127.0.0.1:8000/api/v1/docs).
 
-For Neo4j setup, migrations, and the graph-building worker, see the [Graph RAG setup guide (Chinese)](GraphRAG升级说明.md).
+For Neo4j setup, migrations, and the graph-building worker, see the [Graph RAG setup guide](docs/graph-rag.md).
+
+Use **English** in the top-right toolbar to switch the workspace and new agent replies to English. The browser remembers your language choice. Existing conversations and source excerpts display their original text.
 
 ## Walkthrough
 
-1. In the Operations Workbench, trigger a sync and select Last Week (`上周`). The fresh demo shows **3 due work orders, 2 SLA breaches, and 33.33% compliance** for the Data Collection Gateway (`采集网关`).
-2. In Agent Chat, select Operations Data (`运维数据`) and Last Week (`上周`). Try asking “Which service had the lowest SLA compliance last week, and how should we respond?” Review the ranking, responsible team, and cited runbook excerpts.
+1. In the Operations Workbench, trigger a sync and select Last Week. The fresh demo shows **3 due work orders, 2 SLA breaches, and 33.33% compliance** for the Data Collection Gateway.
+2. In Agent Chat, select Operations Data and Last Week. Try asking “Which service had the lowest SLA compliance last week, and how should we respond?” Review the ranking, responsible team, and cited runbook excerpts.
 3. From `backend`, run `.venv/bin/python scripts/seed_ops_demo.py --add-breach`, then sync and refresh. The first added breach changes the gateway metrics to **4 due work orders, 3 breaches, and 25% compliance**. Select the compliance rate to find the new work order in the underlying records.
 
-See the [demo and upgrade guide (Chinese)](运维数据中台演示.md) for more scenarios.
+See the [operations demo and upgrade guide](docs/ops-demo.md) for more scenarios.
 
 ## Retrieval Evaluation
 
@@ -109,4 +111,3 @@ The two evaluations use separate corpora and question sets. The figures measure 
 
 - Run `.venv/bin/python -B tests/run_tests.py` from `backend`. With local PostgreSQL running, set `OPS_TEST_POSTGRES=1` to include integration tests for sync transactions and service rankings.
 - Run `VITE_OPS_ENABLED=true npm run build` from `front/rag_front` to type-check and build the frontend.
-- See the [source code guide (Chinese)](源码阅读指南.md) and [development reference (Chinese)](开发参考.md) for implementation details.

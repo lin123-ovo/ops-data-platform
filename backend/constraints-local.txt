@@ -1,0 +1,6 @@
+# Keep the Python Milvus client aligned with the locally deployed 2.5 server.
+pymilvus==2.5.18
+langchain-milvus==0.2.2
+
+neo4j==5.28.2
+pytz==2026.6

@@ -1,0 +1,39 @@
+# Merge with compose.yaml. Separate service and volume from other local projects.
+services:
+  neo4j:
+    image: neo4j:5.26.0-community
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in deploy/.env}
+      NEO4J_server_memory_heap_initial__size: 256m
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 256m
+    ports:
+      - "127.0.0.1:27474:7474"
+      - "127.0.0.1:27687:7687"
+    volumes:
+      - graph_neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+  graph-worker:
+    profiles: ["graph-worker"]
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.graph-worker
+    restart: unless-stopped
+    env_file: ../backend/.env
+    environment:
+      GRAPH_ENABLED: "true"
+      NEO4J_URI: bolt://neo4j:7687
+      # This profile runs against the same compose Postgres, not host loopback.
+      POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+volumes:
+  graph_neo4j_data:
