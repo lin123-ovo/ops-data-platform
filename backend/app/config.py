@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     postgres_dsn: str = Field(alias='POSTGRES_DSN')
     redis_url: str = Field(alias='REDIS_URL')
     bocha_api_key: str | None = Field(default=None, alias='BOCHA_API_KEY')
+    aliyun_web_search_enabled: bool = Field(default=True, alias='ALIYUN_WEB_SEARCH_ENABLED')
+    aliyun_web_search_model: str = Field(default='qwen-plus', alias='ALIYUN_WEB_SEARCH_MODEL')
+    aliyun_web_search_timeout_seconds: float = Field(
+        default=30, gt=0, allow_inf_nan=False, alias='ALIYUN_WEB_SEARCH_TIMEOUT_SECONDS',
+    )
 
     # Local, synthetic work-order demo.
     ops_enabled: bool = False

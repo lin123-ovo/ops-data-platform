@@ -6,6 +6,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Generator, Literal
 
 from langchain_core.messages import AIMessage, ToolMessage
@@ -14,6 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.agent.memory import clear_thread_memory
 from app.agent.graph import get_rag_agent
+from app.agent.web_search import web_search_configured
 from app.agent.runtime import RetrievalTrace, bind_retrieval_trace
 from app.core.postgres import get_session_factory
 from app.models.query_log import QueryLog
@@ -57,7 +59,6 @@ class ChatService:
     """
 
     def __init__(self) -> None:
-        self.agent = get_rag_agent()
         self.session_factory = get_session_factory()
 
     def _build_agent_input(
@@ -68,7 +69,16 @@ class ChatService:
 
         # 把已检索片段拼进模型输入，再追加用户问题；模型据此进行有资料依据的生成。
         # 这一步是 Prompt 上下文组装，不是训练或微调模型。
-        messages: list[dict[str, str]] = []
+        messages: list[dict[str, str]] = [{
+            'role': 'system',
+            'content': 'Current date in Asia/Hong_Kong: ' + datetime.now(ZoneInfo('Asia/Hong_Kong')).date().isoformat(),
+        }]
+        if not ops:
+            messages[0]['content'] += (
+                '\n联网工具 search_web 已接入阿里云百炼，当前配置状态：'
+                + ('已启用，可调用。' if web_search_configured() else '未启用或未配置 DashScope Key。')
+                + '需要实时信息时实际调用工具并根据结果说明，不自行推断访问权限。'
+            )
         if prefetched_chunks:
             messages.append(
                 {
@@ -106,10 +116,12 @@ class ChatService:
 
         trace = get_current_retrieval_trace()
         scope = trace.knowledge_base if trace else None
-        thread = session_id if scope is None else session_id + ':kb:' + digest(scope)[:16]
+        thread = session_id + ':auto:v1'
+        if scope is not None:
+            thread += ':kb:' + digest(scope)[:16]
         if ops:
             thread = session_id + ':ops'
-        return {'configurable': {'thread_id': thread}}
+        return {'configurable': {'thread_id': thread}, 'recursion_limit': 24}
 
     def _extract_final_answer(self, result: dict) -> str:
         """从 Agent 返回状态中提取最后一条 AI 回复。"""
@@ -258,10 +270,10 @@ class ChatService:
         )
 
     @contextmanager
-    def _chat_run(self, *, top_k: int, retrieval_mode: str = 'hybrid', knowledge_base: str | None = None) -> Generator[RetrievalTrace, None, None]:
+    def _chat_run(self, *, top_k: int, retrieval_mode: str = 'hybrid', knowledge_base: str | None = None, reply_language: str | None = None) -> Generator[RetrievalTrace, None, None]:
         """为一次问答绑定独立的检索溯源容器。"""
 
-        trace = RetrievalTrace(top_k=top_k, retrieval_mode=retrieval_mode, knowledge_base=knowledge_base)
+        trace = RetrievalTrace(top_k=top_k, retrieval_mode=retrieval_mode, knowledge_base=knowledge_base, reply_language=reply_language)
         with bind_retrieval_trace(trace):
             yield trace
 
@@ -288,16 +300,16 @@ class ChatService:
         if metric is not None:
             knowledge_base = OPS_KNOWLEDGE_BASE
         try:
-            with self._chat_run(top_k=top_k, retrieval_mode=retrieval_mode, knowledge_base=knowledge_base) as trace:
+            with self._chat_run(top_k=top_k, retrieval_mode=retrieval_mode, knowledge_base=knowledge_base, reply_language=reply_language) as trace:
                 config = self._build_agent_config(session_id, ops=metric is not None)
                 prefetched_chunks = self._prefetch_source_chunks(
-                    message=f'{message} SLA 超时工单处置流程' if metric is not None and reply_language == 'en' else message,
+                    message=f'{message} SLA 超时工单处置流程' if reply_language == 'en' else message,
                     top_k=top_k, trace=trace,
-                )
+                ) if metric is not None else []
                 if metric is not None and not prefetched_chunks:
                     answer = 'No relevant operations runbook was found.' if reply_language == 'en' else '未检索到相关运维手册。'
                 else:
-                    result = self.agent.invoke(
+                    result = get_rag_agent(ops=metric is not None).invoke(
                         self._build_agent_input(
                             message, prefetched_chunks, ops=metric is not None, reply_language=reply_language,
                         ), config=config,
@@ -315,9 +327,9 @@ class ChatService:
             session_id=session_id,
             answer=answer,
             latency_ms=latency_ms,
-            source_chunks=source_chunks, diagnostics=dict(trace.diagnostics),
+            source_chunks=source_chunks, diagnostics={**trace.diagnostics, **trace.web_snapshot()},
             thread_id=config['configurable']['thread_id'],
-            route='agent_ops' if metric is not None else 'agent_rag',
+            route='agent_ops' if metric is not None else trace.route(),
             metric_snapshot=metric,
         )
         self._persist_query_log(session_id=session_id, question=message, result=chat_result)
@@ -331,7 +343,7 @@ class ChatService:
         )
 
         return ChatResponse(
-            **trace.diagnostics,
+            **trace.diagnostics, **trace.web_snapshot(),
             session_id=session_id,
             answer=answer,
             latency_ms=latency_ms,
@@ -349,7 +361,7 @@ class ChatService:
         metric = self._ops_metric(ops_period) if ops_period else None
         if metric is not None:
             knowledge_base = OPS_KNOWLEDGE_BASE
-        trace = RetrievalTrace(top_k=top_k, retrieval_mode=retrieval_mode, knowledge_base=knowledge_base)
+        trace = RetrievalTrace(top_k=top_k, retrieval_mode=retrieval_mode, knowledge_base=knowledge_base, reply_language=reply_language)
 
         logger.info(
             '[CHAT] stream started: session=%s top_k=%s message_length=%s message_preview=%r',
@@ -365,9 +377,9 @@ class ChatService:
             config = self._build_agent_config(session_id, ops=metric is not None)
         try:
             prefetched_chunks = self._prefetch_source_chunks(
-                message=f'{message} SLA 超时工单处置流程' if metric is not None and reply_language == 'en' else message,
+                message=f'{message} SLA 超时工单处置流程' if reply_language == 'en' else message,
                 top_k=top_k, trace=trace,
-            )
+            ) if metric is not None else []
             if prefetched_chunks:
                 trace.register(prefetched_chunks)
                 yield format_sse_event(
@@ -422,9 +434,9 @@ class ChatService:
             session_id=session_id,
             answer=answer,
             latency_ms=latency_ms,
-            source_chunks=source_chunks, diagnostics=dict(trace.diagnostics),
+            source_chunks=source_chunks, diagnostics={**trace.diagnostics, **trace.web_snapshot()},
             thread_id=config['configurable']['thread_id'],
-            route='agent_ops' if metric is not None else 'agent_rag',
+            route='agent_ops' if metric is not None else trace.route(),
             metric_snapshot=metric,
         )
         self._persist_query_log(session_id=session_id, question=message, result=chat_result)
@@ -435,6 +447,7 @@ class ChatService:
                 'items': source_chunks, **trace.diagnostics,
             },
         )
+        yield format_sse_event('web_sources', trace.web_snapshot())
         yield format_sse_event(
             'done',
             {
@@ -443,6 +456,7 @@ class ChatService:
                 'route': chat_result.route,
                 'latency_ms': latency_ms,
                 'created_at': chat_result.created_at.isoformat(),
+                'source_chunks': source_chunks, **trace.diagnostics, **trace.web_snapshot(),
             },
         )
 
@@ -452,7 +466,7 @@ class ChatService:
     ) -> Generator[str, None, None]:
         # messages 输出增量文本；updates 输出模型/工具节点的状态更新。
         # 后续统一转换成 SSE 事件，让前端同时展示答案、调用过程和引用来源。
-        for stream_mode, chunk in self.agent.stream(
+        for stream_mode, chunk in get_rag_agent(ops=ops).stream(
             self._build_agent_input(message, prefetched_chunks, ops=ops, reply_language=reply_language),
             config=config,
             stream_mode=['updates', 'messages'],
@@ -479,34 +493,45 @@ class ChatService:
 
             update_chunk = chunk
             for step_name, step_data in update_chunk.items():
-                messages = step_data.get('messages', [])
+                messages = (step_data or {}).get('messages', [])
                 if not messages:
                     continue
 
-                latest_message = messages[-1]
-                if isinstance(latest_message, AIMessage):
-                    tool_calls = latest_message.tool_calls or []
-                    for tool_call in tool_calls:
+                for latest_message in messages:
+                    if isinstance(latest_message, AIMessage):
+                        tool_calls = latest_message.tool_calls or []
+                        if not tool_calls and latest_message.text.strip():
+                            answer_fragments[:] = [latest_message.text.strip()]
+                        for tool_call in tool_calls:
+                            yield format_sse_event(
+                                'tool_call',
+                                {
+                                    'step': step_name,
+                                    'tool_name': tool_call.get('name'),
+                                    'tool_call_id': tool_call.get('id'),
+                                    'args': tool_call.get('args'),
+                                },
+                            )
+                    elif isinstance(latest_message, ToolMessage):
+                        tool_status = getattr(latest_message, 'status', 'success') or 'success'
+                        artifact = getattr(latest_message, 'artifact', None)
+                        if isinstance(artifact, dict) and artifact.get('error'):
+                            tool_status = 'error'
                         yield format_sse_event(
-                            'tool_call',
+                            'tool_error' if tool_status == 'error' else 'tool_result',
                             {
                                 'step': step_name,
-                                'tool_name': tool_call.get('name'),
-                                'tool_call_id': tool_call.get('id'),
-                                'args': tool_call.get('args'),
+                                'tool_name': latest_message.name,
+                                'tool_call_id': latest_message.tool_call_id,
+                                'status': tool_status,
+                                'content': str(latest_message.content),
                             },
                         )
-                elif isinstance(latest_message, ToolMessage):
-                    tool_status = getattr(latest_message, 'status', 'success') or 'success'
-                    yield format_sse_event(
-                        'tool_error' if tool_status == 'error' else 'tool_result',
-                        {
-                            'step': step_name,
-                            'tool_call_id': latest_message.tool_call_id,
-                            'status': tool_status,
-                            'content': str(latest_message.content),
-                        },
-                    )
+
+                trace = get_current_retrieval_trace()
+                if trace is not None and any(isinstance(item, ToolMessage) for item in messages):
+                    yield format_sse_event('sources', {'items': self._normalize_source_chunks(trace.source_chunks), **trace.diagnostics})
+                    yield format_sse_event('web_sources', trace.web_snapshot())
 
     def clear_session(self, session_id: str) -> SessionClearResponse:
         """清空会话日志，并尝试清空 Agent 短期记忆。"""

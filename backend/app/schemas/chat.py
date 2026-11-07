@@ -50,7 +50,23 @@ class SourceChunkItem(GraphFields):
     end_offset: int | None = None
 
 
-class ChatResponse(GraphDiagnostics):
+class WebSourceItem(BaseModel):
+    ref_id: str
+    title: str
+    url: str
+    content: str
+    retrieved_at: datetime
+    published_date: str | None = None
+
+
+class WebSearchFields(BaseModel):
+    web_sources: list[WebSourceItem] = Field(default_factory=list)
+    web_search_status: Literal['not_requested', 'unavailable', 'ok', 'no_results', 'error'] = 'not_requested'
+    web_search_error: str | None = None
+    web_search_summary: str | None = None
+
+
+class ChatResponse(GraphDiagnostics, WebSearchFields):
     """同步聊天响应。"""
 
     session_id: str
@@ -62,7 +78,7 @@ class ChatResponse(GraphDiagnostics):
     created_at: datetime
 
 
-class ChatHistoryItem(GraphDiagnostics):
+class ChatHistoryItem(GraphDiagnostics, WebSearchFields):
     """单轮会话历史记录。"""
 
     id: str

@@ -15,6 +15,8 @@ from app.schemas.chat import (
     SessionSummaryItem,
 )
 from app.services.chat_service import ChatService
+from app.agent.web_search import web_search_configured
+from app.agent.runtime import preserve_stream_context
 
 router = APIRouter(prefix='/chat', tags=['chat'])
 """
@@ -31,6 +33,12 @@ def _ops_period(request: ChatRequest) -> SlaQuery | None:
         })
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail='请选择 1 至 90 天且已经结束的日期区间') from exc
+
+
+@router.get('/capabilities')
+def chat_capabilities() -> dict:
+    """Report configuration without calling the search provider or exposing credentials."""
+    return {'web_search': {'configured': web_search_configured(), 'provider': 'aliyun'}}
 
 
 @router.post('', response_model=ChatResponse)
@@ -57,12 +65,12 @@ def stream_chat(request: ChatRequest) -> StreamingResponse:
     period = _ops_period(request)
     service = ChatService()
     return StreamingResponse(
-        service.stream(
+        preserve_stream_context(service.stream(
             session_id=request.session_id,
             message=request.message,
             top_k=request.top_k, retrieval_mode=request.retrieval_mode, knowledge_base=request.knowledge_base,
             ops_period=period, reply_language=request.reply_language,
-        ),
+        )),
         media_type='text/event-stream',
         headers={
             'Cache-Control': 'no-cache',

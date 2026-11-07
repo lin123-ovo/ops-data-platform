@@ -255,7 +255,11 @@ class ChatIntegrationTests(unittest.TestCase):
         from app.services.chat_service import ChatService
         from langchain_core.messages import AIMessage
         agent = Mock()
-        agent.invoke.return_value = {'messages':[AIMessage(content='回答 [1]')]}
+        from app.agent.tools import search_knowledge_base
+        def invoke(*args, **kwargs):
+            search_knowledge_base.invoke({'query': '问题'})
+            return {'messages': [AIMessage(content='回答 [1]')]}
+        agent.invoke.side_effect = invoke
         hit = {'chunk_id':'c1', 'document_id':'d1', 'content':CONTENT, 'score':1,
                'graph_paths':[], 'rank_graph':1}
         def retrieve(*_, diagnostics=None, **kwargs):
@@ -263,7 +267,8 @@ class ChatIntegrationTests(unittest.TestCase):
             return [hit]
         with patch('app.services.chat_service.get_session_factory', return_value=self.factory), \
              patch('app.services.chat_service.get_rag_agent', return_value=agent), \
-             patch('app.services.chat_service.retrieve_chunks', side_effect=retrieve):
+             patch('app.agent.tools.retrieve_chunks', side_effect=retrieve), \
+             patch('app.agent.tools.get_session_factory', return_value=self.factory):
             service = ChatService()
             response = service.invoke(session_id='s', message='问题', retrieval_mode='graph_hybrid', knowledge_base='default')
             self.assertEqual(response.graph_status, 'degraded')
@@ -276,13 +281,18 @@ class ChatIntegrationTests(unittest.TestCase):
         from app.services.chat_service import ChatService
         from langchain_core.messages import AIMessageChunk
         agent = Mock()
-        agent.stream.return_value = iter([('messages',(AIMessageChunk(content='回答 [1]'),{'langgraph_node':'model'}))])
+        from app.agent.tools import search_knowledge_base
+        def stream(*args, **kwargs):
+            search_knowledge_base.invoke({'query': '问题'})
+            yield ('messages', (AIMessageChunk(content='回答 [1]'), {'langgraph_node': 'model'}))
+        agent.stream.side_effect = stream
         def retrieve(*_, diagnostics=None, **kwargs):
             diagnostics.update(graph_status='no_hits', degradation_reason=None)
             return [{'chunk_id':'c1', 'content':CONTENT, 'score':1}]
         with patch('app.services.chat_service.get_session_factory', return_value=self.factory), \
              patch('app.services.chat_service.get_rag_agent', return_value=agent), \
-             patch('app.services.chat_service.retrieve_chunks', side_effect=retrieve):
+             patch('app.agent.tools.retrieve_chunks', side_effect=retrieve), \
+             patch('app.agent.tools.get_session_factory', return_value=self.factory):
             output = ''.join(ChatService().stream(session_id='s', message='问题', retrieval_mode='graph_hybrid', knowledge_base='default'))
         self.assertIn('event: sources', output)
         self.assertIn('no_hits', output)

@@ -46,6 +46,8 @@ def search_knowledge_base(query: str, top_k: int = 5) -> str:
     with session_factory() as db:
         db: Session
         trace = get_current_retrieval_trace()
+        if trace is not None:
+            trace.knowledge_base_called = True
         effective_top_k = min(top_k, trace.top_k) if trace is not None else top_k
         logger.info(
             '[TOOL][KB] called: query=%r requested_top_k=%s effective_top_k=%s trace_bound=%s',
@@ -120,7 +122,10 @@ def search_knowledge_base(query: str, top_k: int = 5) -> str:
     return '\n\n'.join(lines)
 
 
-def get_agent_tools() -> list:
+def get_agent_tools(*, ops: bool = False) -> list:
     """返回 Agent 可用工具列表。"""
 
-    return [search_knowledge_base]
+    if ops:
+        return [search_knowledge_base]
+    from app.agent.web_search import search_web
+    return [search_knowledge_base, search_web]

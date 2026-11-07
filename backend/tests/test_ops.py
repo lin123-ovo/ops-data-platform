@@ -143,7 +143,7 @@ class OpsValidationTests(unittest.TestCase):
             messages = service._build_agent_input(request['message'], ops=True, reply_language='en')['messages']
         self.assertEqual(answer.answer, 'No relevant operations runbook was found.')
         self.assertIn('No relevant operations runbook was found.', stream)
-        self.assertIn('in English', messages[0]['content'])
+        self.assertTrue(any('in English' in item['content'] for item in messages))
         self.assertIn('Cite each step', messages[-1]['content'])
         self.assertTrue(prefetch.call_args.kwargs['message'].startswith(request['message']))
 

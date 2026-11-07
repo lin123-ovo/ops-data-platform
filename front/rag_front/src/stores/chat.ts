@@ -13,6 +13,7 @@ import type {
   ChatTurn,
   SessionSummaryItem,
   SourceChunkItem,
+  WebSearchFields,
 } from '@/types/api'
 import { createSessionId } from '@/utils/format'
 
@@ -25,12 +26,23 @@ function historyItemToTurn(item: ChatHistoryItem): ChatTurn {
     route: item.route,
     latencyMs: item.latency_ms,
     sourceChunks: item.source_chunks,
+    webSources: item.web_sources || [],
+    webSearchStatus: item.web_search_status || 'not_requested',
+    webSearchError: item.web_search_error || null,
+    webSearchSummary: item.web_search_summary || null,
     metricSnapshot: item.metric_snapshot,
     createdAt: item.created_at,
     updatedAt: item.updated_at,
     graph_status: item.graph_status, degradation_reason: item.degradation_reason,
     events: [],
   }
+}
+
+function updateWebSources(turn: ChatTurn, payload: WebSearchFields) {
+  turn.webSources = payload.web_sources || []
+  turn.webSearchStatus = payload.web_search_status || 'not_requested'
+  turn.webSearchError = payload.web_search_error || null
+  turn.webSearchSummary = payload.web_search_summary || null
 }
 
 function buildEvent(
@@ -145,9 +157,13 @@ export const useChatStore = defineStore('chat', {
         sessionId,
         userQuestion: message,
         answer: '',
-        route: 'agent_rag',
+        route: opsPeriod ? 'agent_ops' : 'agent_chat',
         latencyMs: null,
         sourceChunks: [],
+        webSources: [],
+        webSearchStatus: 'not_requested',
+        webSearchError: null,
+        webSearchSummary: null,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         pending: true,
@@ -207,6 +223,7 @@ export const useChatStore = defineStore('chat', {
               if (eventName === 'tool_result' || eventName === 'tool_error') {
                 pushEvent(eventName, {
                   step: String(payload.step || ''),
+                  tool_name: String(payload.tool_name || ''),
                   tool_call_id: String(payload.tool_call_id || ''),
                   status: String(payload.status || ''),
                   content: String(payload.content || ''),
@@ -228,6 +245,11 @@ export const useChatStore = defineStore('chat', {
                 return
               }
 
+              if (eventName === 'web_sources') {
+                updateWebSources(nextTurn, payload as WebSearchFields)
+                return
+              }
+
               if (eventName === 'error') {
                 nextTurn.failed = true
                 nextTurn.pending = false
@@ -240,8 +262,10 @@ export const useChatStore = defineStore('chat', {
 
               if (eventName === 'done') {
                 nextTurn.pending = false
-                nextTurn.route = String(payload.route || 'agent_rag')
-                if (opsPeriod && typeof payload.answer === 'string') nextTurn.answer = payload.answer
+                nextTurn.route = String(payload.route || 'agent_chat')
+                if (typeof payload.answer === 'string') nextTurn.answer = payload.answer
+                if (Array.isArray(payload.source_chunks)) nextTurn.sourceChunks = payload.source_chunks as SourceChunkItem[]
+                if ('web_sources' in payload) updateWebSources(nextTurn, payload as WebSearchFields)
                 nextTurn.latencyMs = Number(payload.latency_ms || 0)
                 nextTurn.updatedAt = String(payload.created_at || new Date().toISOString())
               }

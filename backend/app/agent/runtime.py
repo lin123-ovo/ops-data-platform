@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import Future
 from threading import RLock
 from contextlib import AbstractContextManager, contextmanager
-from contextvars import ContextVar, Token
+from contextvars import ContextVar, Token, copy_context
 from dataclasses import dataclass, field
 from typing import Generator
 
@@ -17,8 +18,17 @@ class RetrievalTrace:
     top_k: int = 5
     retrieval_mode: str = 'hybrid'
     knowledge_base: str | None = None
+    reply_language: str | None = None
     diagnostics: dict = field(default_factory=dict)
     source_chunks: list[dict] = field(default_factory=list)
+    knowledge_base_called: bool = False
+    web_called: bool = False
+    web_sources: list[dict] = field(default_factory=list)
+    web_search_summaries: list[str] = field(default_factory=list)
+    web_search_status: str = 'not_requested'
+    web_search_error: str | None = None
+    citation_corrections: int = 0
+    web_queries: dict[tuple, Future] = field(default_factory=dict, repr=False)
     _lock: AbstractContextManager = field(default_factory=RLock, repr=False)
 
     def register(self, hits: list[dict]) -> list[dict]:
@@ -50,6 +60,23 @@ class RetrievalTrace:
         with self._lock:
             if priorities.get(diagnostics.get('graph_status'), 0) >= priorities.get(self.diagnostics.get('graph_status'), 0):
                 self.diagnostics.update(diagnostics)
+
+    def web_snapshot(self) -> dict:
+        """Return an independent, JSON-compatible snapshot for responses and history."""
+        with self._lock:
+            return {
+                'web_sources': [dict(source) for source in self.web_sources],
+                'web_search_status': self.web_search_status,
+                'web_search_error': self.web_search_error,
+                'web_search_summary': '\n\n'.join(self.web_search_summaries) or None,
+            }
+
+    def route(self) -> str:
+        if self.knowledge_base_called and self.web_called:
+            return 'agent_mixed'
+        if self.web_called:
+            return 'agent_web'
+        return 'agent_rag' if self.knowledge_base_called else 'agent_chat'
 
 
 _current_retrieval_trace: ContextVar[RetrievalTrace | None] = ContextVar(
@@ -85,3 +112,21 @@ def get_current_retrieval_trace() -> RetrievalTrace | None:
     """返回当前上下文中绑定的检索溯源容器。"""
 
     return _current_retrieval_trace.get()
+
+
+def preserve_stream_context(stream: Generator[str, None, None]) -> Generator[str, None, None]:
+    """Advance and close an SSE generator in one context across threadpool yields.
+
+    StreamingResponse may advance each segment in a different copied context.
+    LangGraph tools must see the same turn-local trace for the entire run.
+    """
+    context = copy_context()
+    try:
+        while True:
+            try:
+                item = context.run(next, stream)
+            except StopIteration:
+                return
+            yield item
+    finally:
+        context.run(stream.close)

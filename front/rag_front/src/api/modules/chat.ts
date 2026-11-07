@@ -30,6 +30,11 @@ export interface StreamHandlers {
   signal?: AbortSignal
 }
 
+export async function fetchChatCapabilities(): Promise<{ web_search: { configured: boolean } }> {
+  const { data } = await http.get('/chat/capabilities')
+  return data
+}
+
 export async function fetchSessions(limit = 50): Promise<SessionSummaryItem[]> {
   const { data } = await http.get<SessionSummaryItem[]>('/chat/sessions', { params: { limit } })
   return data

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { demoLabel, t } from '@/utils/locale'
 import { fetchOpsServices, opsEnabled } from '@/api/modules/ops'
+import { fetchChatCapabilities } from '@/api/modules/chat'
 import type { OpsService } from '@/api/modules/ops'
 import { notifyError } from '@/api/http'
 import OpsMetricCard from '@/components/OpsMetricCard.vue'
@@ -34,6 +35,25 @@ const chatMode = ref<'rag' | 'ops'>('rag')
 const opsPeriod = ref(lastFullWeek())
 const serviceId = ref('')
 const services = ref<OpsService[]>([])
+const webConfigured = ref<boolean | null>(null)
+
+async function loadCapabilities() {
+  try {
+    webConfigured.value = (await fetchChatCapabilities()).web_search.configured
+  } catch (error) {
+    webConfigured.value = null
+    notifyError(error, t('读取联网配置失败', 'Could not read web search availability'))
+  }
+}
+
+function safeWebUrl(url: string): string | undefined {
+  try {
+    const parsed = new URL(url)
+    return ['https:', 'http:'].includes(parsed.protocol) && !parsed.username ? parsed.href : undefined
+  } catch {
+    return undefined
+  }
+}
 
 async function loadServices() {
   try {
@@ -75,7 +95,7 @@ function resetComposer() {
 }
 
 async function initializePage() {
-  await Promise.all([appStore.refreshHealth(true), chatStore.loadSessions()])
+  await Promise.all([appStore.refreshHealth(true), chatStore.loadSessions(), loadCapabilities()])
 
   if (chatStore.activeSessionId) {
     await chatStore.loadHistory(chatStore.activeSessionId)
@@ -145,13 +165,16 @@ onMounted(async () => {
         <div class="panel-kicker">Agent Console</div>
         <h2>{{ t('多轮对话、工具调用与溯源结果全链路观测', 'Chat, tools, and sources') }}</h2>
         <p class="page-description">
-          {{ t('当前页面直连后端流式对话接口，可查看会话历史、实时生成内容、工具调用过程以及最终命中的来源 Chunk。', 'View conversation history, streaming responses, tool calls, and source excerpts.') }}
+          {{ t('可以闲聊、查询知识库或获取最新公开信息，Agent 会自动选择工具，并展示调用过程与来源。', 'Chat, search your knowledge base, or ask about current events. The agent selects tools and shows its sources.') }}
+        </p>
+        <p v-if="chatMode === 'rag'" class="page-description">
+          {{ t('联网由阿里云百炼提供，搜索词可能包含内部资料信息。', 'Alibaba Cloud provides web search. Search terms may include internal document context.') }}
         </p>
       </div>
       <div class="toolbar-actions wrap">
         <el-select v-if="opsEnabled" v-model="chatMode" style="width:140px"
           :disabled="chatStore.sending" :aria-label="t('对话模式', 'Chat mode')">
-          <el-option :label="t('文档问答', 'Document Q&A')" value="rag" />
+          <el-option :label="t('智能对话', 'Agent Chat')" value="rag" />
           <el-option :label="t('运维数据', 'Operations Data')" value="ops" />
         </el-select>
         <el-select v-model="retrievalMode" style="width:170px" :disabled="chatStore.sending" :aria-label="t('检索模式', 'Retrieval mode')"><el-option :label="t('混合检索', 'Hybrid search')" value="hybrid" /><el-option :label="t('图谱增强检索', 'Graph-enhanced search')" value="graph_hybrid" /></el-select>
@@ -167,6 +190,9 @@ onMounted(async () => {
             :disabled="chatStore.sending" :aria-label="t('运维统计结束日期（不含）', 'End date (exclusive)')" />
         </template>
         <el-input v-else v-model="knowledgeBase" style="width:150px" :disabled="chatStore.sending" :placeholder="t('知识库', 'Knowledge base')" :aria-label="t('知识库', 'Knowledge base')" />
+        <el-tag v-if="chatMode === 'rag'" :type="webConfigured ? 'success' : 'info'">
+          {{ webConfigured === null ? t('联网状态未知', 'Web status unknown') : webConfigured ? t('阿里云联网可用', 'Alibaba Cloud web search available') : t('阿里云联网未启用', 'Alibaba Cloud web search unavailable') }}
+        </el-tag>
         <el-tag :type="appStore.backendReady ? 'success' : 'danger'" effect="dark">
           {{ appStore.backendReady ? t('后端可用', 'Backend online') : t('等待后端', 'Waiting for backend') }}
         </el-tag>
@@ -267,6 +293,7 @@ onMounted(async () => {
                   <span class="meta-pill" v-if="turn.sourceChunks.length">
                     sources: {{ turn.sourceChunks.length }}
                   </span>
+                  <span class="meta-pill" v-if="turn.webSources.length">{{ t('网页来源', 'Web sources') }} · {{ turn.webSources.length }}</span>
                   <span class="meta-pill" :class="{ 'is-danger': turn.failed }">
                     {{ turn.failed ? turn.errorMessage || t('执行失败', 'Failed') : turn.pending ? t('执行中', 'In progress') : t('已完成', 'Complete') }}
                   </span>
@@ -286,13 +313,13 @@ onMounted(async () => {
           type="textarea"
           :rows="4"
           resize="none"
-          :placeholder="t('输入你的问题，例如：总结 rule.md 的编码规范，并给出来源 chunk', 'Ask a question and request sources')"
+          :placeholder="chatMode === 'ops' ? t('上周哪个服务 SLA 表现最差，应该怎么处理？', 'Which service had the lowest SLA compliance last week?') : t('例如：你好 / 根据知识库解释 RAG / 查一下 LangChain 最新版本', 'Try: Hello / Explain RAG from my documents / Find the latest LangChain version')"
           @keyup.ctrl.enter="handleSendMessage"
         />
         <div class="composer-actions">
           <div class="composer-config">
             <span>Top K</span>
-            <el-input-number v-model="topK" :min="1" :max="20" />
+            <el-input-number v-model="topK" :min="1" :max="8" />
           </div>
           <div class="toolbar-actions">
             <el-button
@@ -349,6 +376,29 @@ onMounted(async () => {
               <p v-else class="stack-text">{{ event.content || event.message || t('无额外内容', 'No additional details') }}</p>
             </article>
           </div>
+        </div>
+
+        <div class="trace-section">
+          <div class="code-panel-title">{{ t('网页来源', 'Web sources') }}</div>
+          <el-alert v-if="selectedTurn.webSearchError" :title="selectedTurn.webSearchError" type="warning" :closable="false" />
+          <article v-if="selectedTurn.webSearchSummary" class="source-card">
+            <div class="stack-title">{{ t('阿里云联网搜索摘要（模型整理）', 'Alibaba Cloud search summary (model-generated)') }}</div>
+            <p class="stack-text">{{ selectedTurn.webSearchSummary }}</p>
+          </article>
+          <div v-if="selectedTurn.webSources.length" class="source-list">
+            <article v-for="item in selectedTurn.webSources" :key="item.ref_id" class="source-card">
+              <div class="stack-title">
+                <a v-if="safeWebUrl(item.url)" :href="safeWebUrl(item.url)" target="_blank" rel="noopener noreferrer">[{{ item.ref_id }}] {{ item.title }}</a>
+                <span v-else>[{{ item.ref_id }}] {{ item.title }}</span>
+              </div>
+              <div class="stack-meta">
+                <span>{{ t('检索时间', 'Retrieved') }} · {{ formatDateTime(item.retrieved_at) }}</span>
+                <span v-if="item.published_date">{{ t('发布日期', 'Published') }} · {{ item.published_date }}</span>
+              </div>
+              <p class="stack-text">{{ item.content || t('服务返回了来源链接，可打开查看原文。', 'Open the source link to read the original page.') }}</p>
+            </article>
+          </div>
+          <el-empty v-else :description="selectedTurn.webSearchStatus === 'no_results' ? t('未找到相关网页', 'No relevant web results') : t('本轮没有网页来源', 'No web sources for this response')" />
         </div>
 
         <div class="trace-section">

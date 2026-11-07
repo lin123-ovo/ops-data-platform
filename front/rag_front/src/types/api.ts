@@ -88,7 +88,25 @@ export interface SourceChunkItem extends RetrievalHitItem {
   ref_id: number
 }
 
-export interface ChatResponse extends GraphDiagnostics {
+export interface WebSourceItem {
+  ref_id: string
+  title: string
+  url: string
+  content: string
+  retrieved_at: string
+  published_date: string | null
+}
+
+export type WebSearchStatus = 'not_requested' | 'unavailable' | 'ok' | 'no_results' | 'error'
+
+export interface WebSearchFields {
+  web_sources?: WebSourceItem[]
+  web_search_status?: WebSearchStatus
+  web_search_error?: string | null
+  web_search_summary?: string | null
+}
+
+export interface ChatResponse extends GraphDiagnostics, WebSearchFields {
   metric_snapshot?: MetricSnapshot | null
   session_id: string
   answer: string
@@ -98,7 +116,7 @@ export interface ChatResponse extends GraphDiagnostics {
   created_at: string
 }
 
-export interface ChatHistoryItem extends GraphDiagnostics {
+export interface ChatHistoryItem extends GraphDiagnostics, WebSearchFields {
   metric_snapshot?: MetricSnapshot | null
   id: string
   session_id: string | null
@@ -132,6 +150,7 @@ export type ChatStreamEventName =
   | 'tool_result'
   | 'tool_error'
   | 'sources'
+  | 'web_sources'
   | 'metric_snapshot'
   | 'error'
   | 'done'
@@ -151,6 +170,10 @@ export interface ChatToolEvent {
 }
 
 export interface ChatTurn extends GraphDiagnostics {
+  webSources: WebSourceItem[]
+  webSearchStatus: WebSearchStatus
+  webSearchError: string | null
+  webSearchSummary: string | null
   metricSnapshot?: MetricSnapshot | null
   id: string
   sessionId: string
